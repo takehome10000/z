@@ -16,7 +16,7 @@ use arrow::datatypes::{DataType, Field, Schema};
 use arrow_csv::reader::Format;
 use engine::Engine;
 use io::ConcurrentAsyncFileDescriptorReader;
-use output::{AccountOutput, write_output_accounts};
+use output::write_output_accounts;
 use std::fs::File;
 use std::path::Path;
 
@@ -37,7 +37,8 @@ fn is_csv(path: &str) -> anyhow::Result<()> {
             Ok(_) => {}
             Err(_) => {
                 return Err(anyhow::anyhow!(
-                    "invalid csv schema in given file: {}",
+                    "invalid csv schema in given file: {}\n
+                     see tests folder for working example",
                     path
                 ));
             }
@@ -47,7 +48,7 @@ fn is_csv(path: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn resolve_path(path: &str) -> anyhow::Result<String> {
+fn resolve_csv_path(path: &str) -> anyhow::Result<String> {
     let p = Path::new(path);
     if p.is_absolute() {
         Ok(path.to_string())
@@ -59,11 +60,11 @@ fn resolve_path(path: &str) -> anyhow::Result<String> {
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = env::args().collect();
-    let filename = args[1].clone();
-    is_csv(filename.as_str())?;
-    resolve_path(filename.as_str())?;
+    let txs_file = args[1].clone();
+    is_csv(txs_file.as_str())?;
+    resolve_csv_path(txs_file.as_str())?;
 
-    dbg!("consuming file {:?}", &filename);
+    dbg!("consuming file {:?}", &txs_file);
 
     let done = Arc::new(AtomicBool::new(false));
 
@@ -71,16 +72,21 @@ fn main() -> anyhow::Result<()> {
         .map(|n| n.get())
         .map_err(|e| anyhow!("failed to get available cores {:?}", e))?;
 
-    let (engine, senders) = Engine::new(num_workers, done.clone())?;
+    let (engine, tx_senders) = Engine::new(num_workers, done.clone())?;
     let handler = std::thread::spawn(move || -> anyhow::Result<()> {
         let oas = engine.run()?;
         write_output_accounts(oas)?;
         Ok(())
     });
-    let reader_io = ConcurrentAsyncFileDescriptorReader::new(senders);
-    let files = vec![filename];
-    reader_io.consume(files)?;
-    sleep(std::time::Duration::from_millis(5));
+
+    ConcurrentAsyncFileDescriptorReader::new(tx_senders).consume(vec![txs_file])?;
+
+    dbg!(
+        "sleep for X milliseconds\n
+          the larger the batch size the larger our sleep needs to be",
+    );
+
+    sleep(std::time::Duration::from_millis(1000));
     done.store(true, SeqCst);
     handler.join();
     Ok(())

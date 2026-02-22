@@ -1,13 +1,64 @@
 use crate::output::AccountOutput;
 use crate::transaction::{DisputedTx, Transaction, Tx};
+use heapless::spsc::Queue;
 use rust_decimal::Decimal;
 use rust_decimal::prelude::*;
+use smallvec::{SmallVec, smallvec};
 use std::collections::HashMap;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+const DISPUTE_WINDOW_MILLISECONDS: u128 = 1; // 1 to test for now
+const PENDING_WITHDRAWS_SIZE: u64 = 100;
+
+struct PendingWithdraw {
+    tx: Tx,
+    arrival_time: u128,
+}
+
+pub struct PendingWithdraws {
+    max_released: u16,
+    inner: Queue<PendingWithdraw, 256>,
+}
+
+impl PendingWithdraws {
+    fn new() -> Self {
+        PendingWithdraws {
+            max_released: 8,
+            inner: Queue::new(),
+        }
+    }
+
+    fn queue(&mut self, pw: PendingWithdraw) {
+        self.inner.enqueue(pw).ok();
+    }
+
+    fn release_ready(&mut self) -> Option<SmallVec<[PendingWithdraw; 8]>> {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .ok()?
+            .as_millis();
+
+        let mut ready = SmallVec::new();
+
+        while let Some(pw) = self.inner.peek() {
+            if now >= pw.arrival_time + DISPUTE_WINDOW_MILLISECONDS {
+                if let Some(pw) = self.inner.dequeue() {
+                    ready.push(pw);
+                }
+            } else {
+                break;
+            }
+        }
+
+        Some(ready)
+    }
+}
 
 pub struct Account {
     locked: bool,
     client: u16,
     book: DoubleEntryBook,
+    pending_withdraws: PendingWithdraws,
     disputed_txs: HashMap<u32, DisputedTx>,
     deposits: HashMap<u32, Decimal>,
     withdraws: HashMap<u32, Decimal>,
@@ -30,10 +81,11 @@ impl DoubleEntryBook {
 }
 
 impl Account {
-    pub fn new(client: u16, tx: Transaction) -> Self {
+    pub fn new(client: u16) -> Self {
         Account {
             client,
             book: DoubleEntryBook::new(),
+            pending_withdraws: PendingWithdraws::new(),
             disputed_txs: HashMap::new(),
             deposits: HashMap::new(),
             withdraws: HashMap::new(),
@@ -53,11 +105,30 @@ impl Account {
         self.client
     }
 
+    // run_pending_windraws_to_exhaustion runs withdraw txs - if we
+    // exhaust the list we return true
+    pub fn run_pending_withdraws_to_exhaustion(&mut self) -> bool {
+        let Some(pending_withdraws) = self.pending_withdraws.release_ready() else {
+            return false;
+        };
+        if pending_withdraws.is_empty() {
+            return false;
+        }
+
+        dbg!("z");
+
+        for pw in pending_withdraws {
+            self.withdraw(pw.tx);
+        }
+
+        true
+    }
+
     pub fn deposit(&mut self, tx: Tx) {
-        // round up to save the bank money
+        // round down to save the bank money
         let amount = tx
             .amount
-            .round_dp_with_strategy(4, RoundingStrategy::AwayFromZero);
+            .round_dp_with_strategy(4, RoundingStrategy::ToZero);
 
         let is_negative = amount.is_negative();
         let locked = self.locked;
@@ -82,12 +153,22 @@ impl Account {
         self.deposits.insert(tx.id, amount);
     }
 
+    pub fn queue_pending_withdraw(&mut self, tx: Tx) {
+        let Some(arrival_time) = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .ok()
+            .map(|d| d.as_millis())
+        else {
+            return;
+        };
+
+        let pw = PendingWithdraw { tx, arrival_time };
+
+        self.pending_withdraws.queue(pw);
+    }
+
     pub fn withdraw(&mut self, tx: Tx) {
-        // round down to save the bank money
-        let amount = tx
-            .amount
-            .round_dp_with_strategy(4, RoundingStrategy::ToZero);
-        println!("withdraw amount is {:?}", amount);
+        let amount = tx.amount.round_dp(4);
 
         let is_negative = tx.amount.is_negative();
         let locked = self.locked;
@@ -110,6 +191,9 @@ impl Account {
         if insufficient_funds {
             return;
         }
+        if is_zero {
+            return;
+        }
 
         self.book.available_funds -= amount;
         self.book.total_funds -= amount;
@@ -125,7 +209,6 @@ impl Account {
             self.book.available_funds -= amount;
             self.book.held_funds += amount;
             self.disputed_txs.insert(tx.id, DisputedTx { id: tx.id });
-            return;
         } else if let Some(&amount) = self.withdraws.get(&tx.id) {
             self.book.available_funds -= amount;
             self.book.held_funds += amount;
@@ -156,7 +239,6 @@ impl Account {
             self.disputed_txs.remove(&tx.id);
             self.book.held_funds -= amount;
             self.book.total_funds -= amount;
-            return;
         } else if let Some(&amount) = self.withdraws.get(&tx.id) {
             self.disputed_txs.remove(&tx.id);
             self.book.held_funds -= amount;

@@ -6,7 +6,7 @@ a lock free, no share work engine where we distribute workloads across avaliable
 
 worker threads are pinned at a 1:1 ratio to each core
 
-accounts remain on the cores they are initaited on throughout the processing lifecycle
+accounts remain on the cores they are initiated on throughout the processing lifecycle
 
 a work stealing algorithm is not implemented so all cores may not be fully saturated depending
 on the distribution of our input transactions' clients
@@ -27,9 +27,12 @@ and other features.  i thought it would be cool to work on this skill.
 * much more ...
 
 ## assumptions
-
 * clients are not skewed and are evenly distributed across transaction inputs
 * transactions per client are ordered 'chronologically' the transactions can't come in out of order
+* a disputed transaction can not be resolved and chargebacked - only resolved or chargebacked
+* withdraws will always come in as pending for a given configurable `dispute window`.  this allows 
+  possible past `deposit disputes` to be made priority before a withdrawal can be made on the banks funds.
+* transaction ids are unique across both deposit and withdraws
 
 ## artifical intellligence use
 

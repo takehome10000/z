@@ -10,7 +10,7 @@ pub struct Tx {
 #[derive(Debug)]
 pub enum Transaction {
     Deposit(Tx),
-    Withdrawal(Tx),
+    PendingWithdrawal(Tx),
     Dispute(Tx),
     Resolve(Tx),
     Chargeback(Tx),

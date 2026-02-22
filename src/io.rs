@@ -64,19 +64,20 @@ impl ConcurrentAsyncFileDescriptorReader {
         Self { rt, senders }
     }
 
-    pub fn consume(&self, files: Vec<String>) -> anyhow::Result<()> {
+    pub fn consume(&self, tx_csvs: Vec<String>) -> anyhow::Result<()> {
         self.rt.block_on(async {
             let mut handles = vec![];
             let senders = self.senders.clone();
-            for f in files {
+            for tx_csv in tx_csvs {
                 let senders = senders.clone();
                 let handle = tokio::spawn(async move {
-                    let file = tokio::fs::File::open(f).await?;
+                    let file = tokio::fs::File::open(tx_csv).await?;
                     let reader = tokio::io::BufReader::new(file);
                     let decoder = ReaderBuilder::new(Arc::new(CSV_SCHEMA_INPUT.clone()))
                         .with_header(true)
                         .with_batch_size(TX_CHUNK_SIZE)
                         .build_decoder();
+
                     let mut stream = decode_stream(decoder, reader);
 
                     while let Some(batch) = stream.try_next().await? {
@@ -115,7 +116,7 @@ impl ConcurrentAsyncFileDescriptorReader {
                                 match Decimal::from_str(amounts.value(i).trim()) {
                                     Ok(d) => d,
                                     Err(_) => {
-                                        println!("skipping bad amount: {}", amounts.value(i));
+                                        dbg!("skipping bad amount: {}", amounts.value(i));
                                         continue;
                                     }
                                 }
@@ -123,18 +124,18 @@ impl ConcurrentAsyncFileDescriptorReader {
                             let tx = Tx { client, id, amount };
                             let tx = match intent.trim() {
                                 "deposit" => Transaction::Deposit(tx),
-                                "withdraw" => Transaction::Withdrawal(tx),
+                                "withdraw" => Transaction::PendingWithdrawal(tx),
                                 "dispute" => Transaction::Dispute(tx),
                                 "resolve" => Transaction::Resolve(tx),
                                 "chargeback" => Transaction::Chargeback(tx),
                                 _ => {
-                                    println!("skipping unknown intent: {}", intent);
+                                    dbg!("skipping unknown intent: {}", intent);
                                     continue;
                                 }
                             };
                             let shard_idx = client as usize % senders.len();
                             if let Err(e) = senders[shard_idx].send(vec![tx]) {
-                                println!("shard send failed: {}", e);
+                                dbg!("shard send failed: {}", e);
                             }
                         }
                     }
