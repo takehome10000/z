@@ -80,7 +80,7 @@ fn main() -> anyhow::Result<()> {
     let reader_io = ConcurrentAsyncFileDescriptorReader::new(senders);
     let files = vec![filename];
     reader_io.consume(files)?;
-    sleep(std::time::Duration::from_micros(5000));
+    sleep(std::time::Duration::from_millis(5));
     done.store(true, SeqCst);
     handler.join();
     Ok(())

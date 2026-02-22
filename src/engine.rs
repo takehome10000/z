@@ -7,7 +7,7 @@ use std::sync::atomic::AtomicBool;
 use std::thread;
 
 pub struct Engine {
-    receivers: Vec<Receiver<Transaction>>,
+    receivers: Vec<Receiver<Vec<Transaction>>>,
     done: Arc<AtomicBool>,
 }
 
@@ -15,11 +15,11 @@ impl Engine {
     pub fn new(
         workers: usize,
         done: Arc<AtomicBool>,
-    ) -> anyhow::Result<(Self, Vec<Sender<Transaction>>)> {
+    ) -> anyhow::Result<(Self, Vec<Sender<Vec<Transaction>>>)> {
         let mut senders = vec![];
         let mut receivers = vec![];
         for _ in 0..=workers {
-            let (tx, rx) = unbounded::<Transaction>();
+            let (tx, rx) = unbounded::<Vec<Transaction>>();
             senders.push(tx);
             receivers.push(rx);
         }

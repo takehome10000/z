@@ -10,11 +10,10 @@ pub struct Account {
     book: DoubleEntryBook,
     disputed_txs: HashMap<u32, DisputedTx>,
     deposits: HashMap<u32, Decimal>,
+    withdraws: HashMap<u32, Decimal>,
 }
 
 pub struct DoubleEntryBook {
-    credited: Decimal,
-    debited: Decimal,
     pub available_funds: Decimal,
     pub held_funds: Decimal,
     pub total_funds: Decimal,
@@ -23,8 +22,6 @@ pub struct DoubleEntryBook {
 impl DoubleEntryBook {
     fn new() -> Self {
         DoubleEntryBook {
-            credited: Decimal::ZERO,
-            debited: Decimal::ZERO,
             available_funds: Decimal::ZERO,
             held_funds: Decimal::ZERO,
             total_funds: Decimal::ZERO,
@@ -39,6 +36,7 @@ impl Account {
             book: DoubleEntryBook::new(),
             disputed_txs: HashMap::new(),
             deposits: HashMap::new(),
+            withdraws: HashMap::new(),
             locked: false,
         }
     }
@@ -56,64 +54,114 @@ impl Account {
     }
 
     pub fn deposit(&mut self, tx: Tx) {
-        if self.locked {
+        // round up to save the bank money
+        let amount = tx
+            .amount
+            .round_dp_with_strategy(4, RoundingStrategy::AwayFromZero);
+
+        let is_negative = amount.is_negative();
+        let locked = self.locked;
+        let duplicate = self.deposits.contains_key(&tx.id);
+        let is_zero = amount.is_zero();
+
+        if locked {
             return;
         }
-        let amount = tx.amount.round_dp(4);
-        self.deposits.insert(tx.id as u32, amount);
+        if duplicate {
+            return;
+        }
+        if is_negative {
+            return;
+        }
+        if is_zero {
+            return;
+        }
+
         self.book.available_funds += amount;
         self.book.total_funds += amount;
-        self.book.credited += amount;
+        self.deposits.insert(tx.id, amount);
     }
 
     pub fn withdraw(&mut self, tx: Tx) {
-        if self.locked {
+        // round down to save the bank money
+        let amount = tx
+            .amount
+            .round_dp_with_strategy(4, RoundingStrategy::ToZero);
+        println!("withdraw amount is {:?}", amount);
+
+        let is_negative = tx.amount.is_negative();
+        let locked = self.locked;
+        let duplicate = self.withdraws.contains_key(&tx.id);
+        let insufficient_funds = (self.book.available_funds - amount).is_negative();
+        let is_zero = amount.is_zero();
+
+        if locked {
             return;
         }
-        let amount = tx.amount.round_dp(4);
-        if self.book.available_funds < amount {
+        if duplicate {
             return;
         }
+        if is_negative {
+            return;
+        }
+        if is_zero {
+            return;
+        }
+        if insufficient_funds {
+            return;
+        }
+
         self.book.available_funds -= amount;
         self.book.total_funds -= amount;
-        self.book.debited += amount;
+        self.withdraws.insert(tx.id, amount);
     }
 
+    // todo: should disputes be made a priority over withdraw transactions?
     pub fn dispute(&mut self, tx: Tx) {
-        let Some(&amount) = self.deposits.get(&(tx.id as u32)) else {
-            return;
-        };
-        if self.disputed_txs.contains_key(&(tx.id as u32)) {
+        if self.disputed_txs.contains_key(&tx.id) {
             return;
         }
-        self.disputed_txs
-            .insert(tx.id as u32, DisputedTx { id: tx.id as u32 });
-        self.book.available_funds -= amount;
-        self.book.held_funds += amount;
+        if let Some(&amount) = self.deposits.get(&tx.id) {
+            self.book.available_funds -= amount;
+            self.book.held_funds += amount;
+            self.disputed_txs.insert(tx.id, DisputedTx { id: tx.id });
+            return;
+        } else if let Some(&amount) = self.withdraws.get(&tx.id) {
+            self.book.available_funds -= amount;
+            self.book.held_funds += amount;
+            self.disputed_txs.insert(tx.id, DisputedTx { id: tx.id });
+        }
     }
 
     pub fn resolve(&mut self, tx: Tx) {
-        if !self.disputed_txs.contains_key(&(tx.id as u32)) {
+        if !self.disputed_txs.contains_key(&tx.id) {
             return;
         }
-        let Some(&amount) = self.deposits.get(&(tx.id as u32)) else {
-            return;
-        };
-        self.disputed_txs.remove(&(tx.id as u32));
-        self.book.held_funds -= amount;
-        self.book.available_funds += amount;
+        if let Some(&amount) = self.deposits.get(&tx.id) {
+            self.disputed_txs.remove(&tx.id);
+            self.book.held_funds -= amount;
+            self.book.available_funds += amount;
+        } else if let Some(&amount) = self.withdraws.get(&tx.id) {
+            self.disputed_txs.remove(&tx.id);
+            self.book.held_funds -= amount;
+            self.book.available_funds += amount;
+        }
     }
 
     pub fn chargeback(&mut self, tx: Tx) {
-        if !self.disputed_txs.contains_key(&(tx.id as u32)) {
+        if !self.disputed_txs.contains_key(&tx.id) {
             return;
         }
-        let Some(&amount) = self.deposits.get(&(tx.id as u32)) else {
+        if let Some(&amount) = self.deposits.get(&tx.id) {
+            self.disputed_txs.remove(&tx.id);
+            self.book.held_funds -= amount;
+            self.book.total_funds -= amount;
             return;
-        };
-        self.disputed_txs.remove(&(tx.id as u32));
-        self.book.held_funds -= amount;
-        self.book.total_funds -= amount;
+        } else if let Some(&amount) = self.withdraws.get(&tx.id) {
+            self.disputed_txs.remove(&tx.id);
+            self.book.held_funds -= amount;
+            self.book.total_funds += amount;
+        }
         self.locked = true;
     }
 }

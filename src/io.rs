@@ -1,5 +1,5 @@
 use crate::transaction::{Transaction, Tx};
-use arrow::array::{Array, Decimal128Array, StringArray, UInt16Array, UInt32Array};
+use arrow::array::{Array, StringArray, UInt16Array, UInt32Array};
 use arrow::csv::ReaderBuilder;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::error::ArrowError;
@@ -11,9 +11,10 @@ use futures::ready;
 use lazy_static::lazy_static;
 use rust_decimal::Decimal;
 use std::pin::Pin;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::task::Poll;
-use tokio::io::AsyncBufRead;
+use tokio::io::{AsyncBufRead, AsyncBufReadExt};
 use tokio::runtime::Runtime;
 
 const TX_CHUNK_SIZE: usize = 300_000;
@@ -23,15 +24,16 @@ lazy_static! {
         Field::new("type", DataType::Utf8, false),
         Field::new("client", DataType::UInt16, false),
         Field::new("tx", DataType::UInt32, false),
-        Field::new("amount", DataType::Decimal128(18, 4), true),
+        Field::new("amount", DataType::Utf8, true),
     ]);
 }
 
 pub struct ConcurrentAsyncFileDescriptorReader {
     rt: Runtime,
-    senders: Vec<crossbeam::channel::Sender<Transaction>>,
+    senders: Vec<crossbeam::channel::Sender<Vec<Transaction>>>,
 }
 
+// note: decode_stream is pulled from here https://docs.rs/arrow-csv/latest/arrow_csv/reader/
 fn decode_stream<R: AsyncBufRead + Unpin>(
     mut decoder: Decoder,
     mut reader: R,
@@ -43,18 +45,21 @@ fn decode_stream<R: AsyncBufRead + Unpin>(
                 Err(e) => return Poll::Ready(Some(Err(e.into()))),
             };
             let decoded = match decoder.decode(b) {
+                // note: the decoder needs to be called with an empty
+                // array to delimit the final record
                 Ok(0) => break,
                 Ok(decoded) => decoded,
                 Err(e) => return Poll::Ready(Some(Err(e))),
             };
             Pin::new(&mut reader).consume(decoded);
         }
+
         Poll::Ready(decoder.flush().transpose())
     })
 }
 
 impl ConcurrentAsyncFileDescriptorReader {
-    pub fn new(senders: Vec<crossbeam::channel::Sender<Transaction>>) -> Self {
+    pub fn new(senders: Vec<crossbeam::channel::Sender<Vec<Transaction>>>) -> Self {
         let rt = Runtime::new().expect("failed to create tokio runtime");
         Self { rt, senders }
     }
@@ -75,6 +80,11 @@ impl ConcurrentAsyncFileDescriptorReader {
                     let mut stream = decode_stream(decoder, reader);
 
                     while let Some(batch) = stream.try_next().await? {
+                        // todo: is there a nicer way of doing this type casting / object tx serialization
+                        //       in arrow?
+                        //
+                        // https://github.com/apache/arrow-rs/issues/1760
+
                         let types = batch
                             .column(0)
                             .as_any()
@@ -93,31 +103,39 @@ impl ConcurrentAsyncFileDescriptorReader {
                         let amounts = batch
                             .column(3)
                             .as_any()
-                            .downcast_ref::<Decimal128Array>()
+                            .downcast_ref::<StringArray>()
                             .unwrap();
-
                         for i in 0..batch.num_rows() {
-                            let intent = types.value(i).trim();
+                            let intent = types.value(i);
                             let client = clients.value(i);
                             let id = ids.value(i);
                             let amount = if amounts.is_null(i) {
                                 Decimal::ZERO
                             } else {
-                                Decimal::from_i128_with_scale(amounts.value(i), 4)
+                                match Decimal::from_str(amounts.value(i).trim()) {
+                                    Ok(d) => d,
+                                    Err(_) => {
+                                        println!("skipping bad amount: {}", amounts.value(i));
+                                        continue;
+                                    }
+                                }
                             };
-
                             let tx = Tx { client, id, amount };
-                            let tx = match intent {
+                            let tx = match intent.trim() {
                                 "deposit" => Transaction::Deposit(tx),
-                                "withdrawal" => Transaction::Withdrawal(tx),
+                                "withdraw" => Transaction::Withdrawal(tx),
                                 "dispute" => Transaction::Dispute(tx),
                                 "resolve" => Transaction::Resolve(tx),
                                 "chargeback" => Transaction::Chargeback(tx),
-                                _ => continue,
+                                _ => {
+                                    println!("skipping unknown intent: {}", intent);
+                                    continue;
+                                }
                             };
-
                             let shard_idx = client as usize % senders.len();
-                            senders[shard_idx].send(tx).ok();
+                            if let Err(e) = senders[shard_idx].send(vec![tx]) {
+                                println!("shard send failed: {}", e);
+                            }
                         }
                     }
                     Ok::<(), anyhow::Error>(())
