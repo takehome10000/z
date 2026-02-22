@@ -3,7 +3,7 @@ use rust_decimal::Decimal;
 #[derive(Debug, Copy, Clone)]
 pub struct Tx {
     pub client: u16,
-    pub id: u64,
+    pub id: u32,
     pub amount: Decimal,
 }
 
@@ -17,5 +17,5 @@ pub enum Transaction {
 }
 
 pub struct DisputedTx {
-    pub id: u64,
+    pub id: u32,
 }

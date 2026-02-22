@@ -1,0 +1,23 @@
+[package]
+name = "kraken"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.102"
+arrow = "57.3.0"
+arrow-csv = "57.3.0"
+core_affinity = "0.8.3"
+crossbeam = "0.8.4"
+csv = "1.4.0"
+decimal = "2.1.0"
+fixed = "1.30.0"
+futures = "0.3.32"
+indexmap = "2.13.0"
+lazy_static = "1.5.0"
+rayon = "1.11.0"
+rust_decimal = "1"
+serde = { version = "1.0", features = ["derive"] }
+smallvec = "1.15.1"
+tempfile = "3.25.0"
+tokio = { version = "1.49.0", features = ["full"]}

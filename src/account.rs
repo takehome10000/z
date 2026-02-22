@@ -5,12 +5,10 @@ use rust_decimal::prelude::*;
 use std::collections::HashMap;
 
 pub struct Account {
-    last_tx: u64,
     locked: bool,
-    earliest_tx: u64,
     client: u16,
     book: DoubleEntryBook,
-    disputed_txs: HashMap<u64, DisputedTx>,
+    disputed_txs: HashMap<u32, DisputedTx>,
     deposits: HashMap<u32, Decimal>,
 }
 
@@ -37,13 +35,11 @@ impl DoubleEntryBook {
 impl Account {
     pub fn new(client: u16, tx: Transaction) -> Self {
         Account {
-            last_tx: 0,
             client,
             book: DoubleEntryBook::new(),
             disputed_txs: HashMap::new(),
             deposits: HashMap::new(),
             locked: false,
-            earliest_tx: 0,
         }
     }
 
@@ -87,31 +83,35 @@ impl Account {
         let Some(&amount) = self.deposits.get(&(tx.id as u32)) else {
             return;
         };
-        self.disputed_txs.insert(tx.id, DisputedTx { id: tx.id });
+        if self.disputed_txs.contains_key(&(tx.id as u32)) {
+            return;
+        }
+        self.disputed_txs
+            .insert(tx.id as u32, DisputedTx { id: tx.id as u32 });
         self.book.available_funds -= amount;
         self.book.held_funds += amount;
     }
 
     pub fn resolve(&mut self, tx: Tx) {
-        if !self.disputed_txs.contains_key(&tx.id) {
+        if !self.disputed_txs.contains_key(&(tx.id as u32)) {
             return;
         }
         let Some(&amount) = self.deposits.get(&(tx.id as u32)) else {
             return;
         };
-        self.disputed_txs.remove(&tx.id);
+        self.disputed_txs.remove(&(tx.id as u32));
         self.book.held_funds -= amount;
         self.book.available_funds += amount;
     }
 
     pub fn chargeback(&mut self, tx: Tx) {
-        if !self.disputed_txs.contains_key(&tx.id) {
+        if !self.disputed_txs.contains_key(&(tx.id as u32)) {
             return;
         }
         let Some(&amount) = self.deposits.get(&(tx.id as u32)) else {
             return;
         };
-        self.disputed_txs.remove(&tx.id);
+        self.disputed_txs.remove(&(tx.id as u32));
         self.book.held_funds -= amount;
         self.book.total_funds -= amount;
         self.locked = true;
