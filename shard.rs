@@ -1,14 +1,13 @@
 use crate::account::Account;
+use crate::output::AccountOutput;
 use crate::transaction::Transaction;
-use crossbeam::channel::{Receiver, Sender};
-use heapless::index_map::FnvIndexMap;
+use crossbeam::channel::Receiver;
+use indexmap::IndexMap;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering::{Acquire, Relaxed, SeqCst};
-
-const ACCOUNTS_PER_SHARD: usize = 500_000;
+use std::sync::atomic::Ordering::Relaxed;
 
 pub struct Worker {
     pub id: u16,
@@ -20,13 +19,14 @@ impl Worker {
         Self { id, txs }
     }
 
-    pub fn run(&mut self, done: Arc<AtomicBool>) {
+    pub fn run(&mut self, done: Arc<AtomicBool>) -> Vec<AccountOutput> {
         let mut shard = Shard::new();
         loop {
             if done.load(Relaxed) {
+                dbg!("received trigger!");
                 break;
             }
-            match self.txs.recv() {
+            match self.txs.try_recv() {
                 Ok(transaction) => match transaction {
                     Transaction::Deposit(tx) => {
                         let client_id = tx.client as u16;
@@ -71,28 +71,34 @@ impl Worker {
                         }
                     }
                 },
-                Err(_) => {
-                    // channel disconnected — shut down cleanly
-                    eprintln!("worker {} shutting down", self.id);
-                    self.finalize();
-                    return;
-                }
+                Err(_) => continue,
             }
         }
-        // todo: complete shard here
+        shard
+            .accounts
+            .iter()
+            .map(|(_, account)| {
+                let account = account.borrow();
+                AccountOutput {
+                    client: account.client(),
+                    available: account.book().available_funds,
+                    held: account.book().held_funds,
+                    total: account.book().total_funds,
+                    locked: account.locked(),
+                }
+            })
+            .collect::<Vec<AccountOutput>>()
     }
-
-    fn finalize(&mut self) {}
 }
 
 struct Shard {
-    accounts: FnvIndexMap<u16, Rc<RefCell<Account>>, ACCOUNTS_PER_SHARD>,
+    accounts: IndexMap<u16, Rc<RefCell<Account>>>,
 }
 
 impl Shard {
     fn new() -> Self {
         Shard {
-            accounts: FnvIndexMap::new(),
+            accounts: IndexMap::new(),
         }
     }
 }
