@@ -45,13 +45,12 @@ impl Worker {
             match self.txs.try_recv() {
                 Ok(transaction) => match transaction[0] {
                     Transaction::Deposit(tx) => {
-                        let client_id = tx.client as u16;
-                        if let Some(account) = account_shard.accounts.get_mut(&client_id) {
+                        if let Some(account) = account_shard.accounts.get_mut(&tx.client) {
                             account.borrow_mut().deposit(tx);
                         } else {
-                            let acc = Rc::new(RefCell::new(Account::new(client_id)));
+                            let acc = Rc::new(RefCell::new(Account::new(tx.client)));
                             acc.borrow_mut().deposit(tx);
-                            account_shard.accounts.insert(client_id, acc);
+                            account_shard.accounts.insert(tx.client, acc);
                         }
                     }
                     Transaction::PendingWithdrawal(tx) => {
@@ -79,8 +78,7 @@ impl Worker {
                         }
                     }
                     Transaction::Chargeback(tx) => {
-                        let client_id = tx.client as u16;
-                        if let Some(account) = account_shard.accounts.get_mut(&client_id) {
+                        if let Some(account) = account_shard.accounts.get_mut(&tx.client) {
                             account.borrow_mut().chargeback(tx);
                         }
                     }

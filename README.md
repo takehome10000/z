@@ -32,7 +32,7 @@ and other features.  i thought it would be cool to work on this skill.
 * only withdraw transactions can be disputed
 * a disputed withdraw transaction can not be resolved and chargebacked - only resolved or chargebacked
 * withdraws will always come in as pending for a given configurable `dispute window`.  this allows 
-  possible past `deposit` to be made priority before a withdrawal can be made on the banks funds.
+  incoming `dispute deposit` to be made a priority before a withdrawal can be made on the banks funds.
 * transaction ids are unique across both deposit and withdraws
 
 ## artifical intellligence use
