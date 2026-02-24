@@ -29,9 +29,10 @@ and other features.  i thought it would be cool to work on this skill.
 ## assumptions
 * clients are not skewed and are evenly distributed across transaction inputs
 * transactions per client are ordered 'chronologically' the transactions can't come in out of order
-* a disputed transaction can not be resolved and chargebacked - only resolved or chargebacked
+* only withdraw transactions can be disputed
+* a disputed withdraw transaction can not be resolved and chargebacked - only resolved or chargebacked
 * withdraws will always come in as pending for a given configurable `dispute window`.  this allows 
-  possible past `deposit disputes` to be made priority before a withdrawal can be made on the banks funds.
+  possible past `deposit` to be made priority before a withdrawal can be made on the banks funds.
 * transaction ids are unique across both deposit and withdraws
 
 ## artifical intellligence use

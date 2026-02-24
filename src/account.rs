@@ -20,40 +20,6 @@ pub struct PendingWithdraws {
     inner: Queue<PendingWithdraw, 256>,
 }
 
-impl PendingWithdraws {
-    fn new() -> Self {
-        PendingWithdraws {
-            max_released: 8,
-            inner: Queue::new(),
-        }
-    }
-
-    fn queue(&mut self, pw: PendingWithdraw) {
-        self.inner.enqueue(pw).ok();
-    }
-
-    fn release_ready(&mut self) -> Option<SmallVec<[PendingWithdraw; 8]>> {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .ok()?
-            .as_millis();
-
-        let mut ready = SmallVec::new();
-
-        while let Some(pw) = self.inner.peek() {
-            if now >= pw.arrival_time + DISPUTE_WINDOW_MILLISECONDS {
-                if let Some(pw) = self.inner.dequeue() {
-                    ready.push(pw);
-                }
-            } else {
-                break;
-            }
-        }
-
-        Some(ready)
-    }
-}
-
 pub struct Account {
     locked: bool,
     client: u16,
@@ -130,21 +96,19 @@ impl Account {
             .amount
             .round_dp_with_strategy(4, RoundingStrategy::ToZero);
 
-        let is_negative = amount.is_negative();
         let locked = self.locked;
         let duplicate = self.deposits.contains_key(&tx.id);
-        let is_zero = amount.is_zero();
 
+        if amount.is_zero() {
+            return;
+        }
+        if amount.is_negative() {
+            return;
+        }
         if locked {
             return;
         }
         if duplicate {
-            return;
-        }
-        if is_negative {
-            return;
-        }
-        if is_zero {
             return;
         }
 
@@ -173,9 +137,14 @@ impl Account {
         let is_negative = tx.amount.is_negative();
         let locked = self.locked;
         let duplicate = self.withdraws.contains_key(&tx.id);
-        let insufficient_funds = (self.book.available_funds - amount).is_negative();
-        let is_zero = amount.is_zero();
+        let insufficient_funds = self.book.available_funds - amount;
 
+        if amount.is_zero() {
+            return;
+        }
+        if insufficient_funds.is_negative() {
+            return;
+        }
         if locked {
             return;
         }
@@ -183,15 +152,6 @@ impl Account {
             return;
         }
         if is_negative {
-            return;
-        }
-        if is_zero {
-            return;
-        }
-        if insufficient_funds {
-            return;
-        }
-        if is_zero {
             return;
         }
 
@@ -209,10 +169,6 @@ impl Account {
             self.book.available_funds -= amount;
             self.book.held_funds += amount;
             self.disputed_txs.insert(tx.id, DisputedTx { id: tx.id });
-        } else if let Some(&amount) = self.withdraws.get(&tx.id) {
-            self.book.available_funds -= amount;
-            self.book.held_funds += amount;
-            self.disputed_txs.insert(tx.id, DisputedTx { id: tx.id });
         }
     }
 
@@ -221,10 +177,6 @@ impl Account {
             return;
         }
         if let Some(&amount) = self.deposits.get(&tx.id) {
-            self.disputed_txs.remove(&tx.id);
-            self.book.held_funds -= amount;
-            self.book.available_funds += amount;
-        } else if let Some(&amount) = self.withdraws.get(&tx.id) {
             self.disputed_txs.remove(&tx.id);
             self.book.held_funds -= amount;
             self.book.available_funds += amount;
@@ -239,10 +191,6 @@ impl Account {
             self.disputed_txs.remove(&tx.id);
             self.book.held_funds -= amount;
             self.book.total_funds -= amount;
-        } else if let Some(&amount) = self.withdraws.get(&tx.id) {
-            self.disputed_txs.remove(&tx.id);
-            self.book.held_funds -= amount;
-            self.book.total_funds += amount;
         }
         self.locked = true;
     }
