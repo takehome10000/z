@@ -1,16 +1,19 @@
 use crate::account::Account;
 use crate::output::AccountOutput;
-use crate::transaction::Transaction;
+use crate::transaction::{PendingWithdraw, Transaction};
 use crossbeam::channel::Receiver;
 use heapless::Deque;
-
 use indexmap::IndexMap;
-use smallvec::{SmallVec, smallvec};
+use smallvec::SmallVec;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::Acquire;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+const DISPUTE_WINDOW_MILLISECONDS: u128 = 1;
+const PENDING_QUEUE_SIZE: usize = 256;
 
 pub struct Worker {
     pub id: u16,
@@ -24,21 +27,17 @@ impl Worker {
 
     pub fn run(&mut self, done: Arc<AtomicBool>) -> Vec<AccountOutput> {
         let mut account_shard = AccountShard::new();
+
         loop {
             if done.load(Acquire) {
                 dbg!("received trigger!");
                 break;
             }
 
-            // get all the accounts that may pending withdraw
-            // transactions that may have past its dispute window
-            if let Some(client_accounts) = account_shard.accounts_with_pending_withdraws() {
-                for client_account in client_accounts {
-                    if let Some(acc) = account_shard.accounts.get_mut(&client_account) {
-                        let exhausted = acc.borrow_mut().run_pending_withdraws_to_exhaustion();
-                        if !exhausted {
-                            account_shard.queue_priority_account(client_account);
-                        }
+            if let Some(ready) = account_shard.ready_withdrawals() {
+                for pw in ready {
+                    if let Some(account) = account_shard.accounts.get_mut(&pw.tx.client) {
+                        account.borrow_mut().withdraw(pw.tx);
                     }
                 }
             }
@@ -55,13 +54,19 @@ impl Worker {
                             account_shard.accounts.insert(client_id, acc);
                         }
                     }
-                    // rather then withdrawing, queue the transaction until our system
-                    // has past DISPUTE_WINDOW_MILLISECONDS
                     Transaction::PendingWithdrawal(tx) => {
-                        if let Some(account) = account_shard.accounts.get_mut(&tx.client) {
-                            account.borrow_mut().queue_pending_withdraw(tx);
-                            account_shard.queue_pending_withdraw_account(tx.client);
-                        }
+                        let Some(arrival_time) = SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .map_err(|clock_error| {
+                                dbg!("system clock failed {:?}", clock_error);
+                            })
+                            .ok()
+                            .map(|d| d.as_millis())
+                        else {
+                            continue;
+                        };
+                        let pw = PendingWithdraw { arrival_time, tx };
+                        account_shard.pending_withdraws.push_back(pw).ok();
                     }
                     Transaction::Dispute(tx) => {
                         if let Some(account) = account_shard.accounts.get_mut(&tx.client) {
@@ -74,7 +79,6 @@ impl Worker {
                         }
                     }
                     Transaction::Chargeback(tx) => {
-                        dbg!("incoming tx client {:?} id {:?}!");
                         let client_id = tx.client as u16;
                         if let Some(account) = account_shard.accounts.get_mut(&client_id) {
                             account.borrow_mut().chargeback(tx);
@@ -84,6 +88,7 @@ impl Worker {
                 Err(_) => continue,
             }
         }
+
         account_shard
             .accounts
             .iter()
@@ -102,38 +107,39 @@ impl Worker {
 }
 
 struct AccountShard {
+    pending_withdraws: Deque<PendingWithdraw, PENDING_QUEUE_SIZE>,
     accounts: IndexMap<u16, Rc<RefCell<Account>>>,
-    pending_withdraws_accs: Deque<u16, 128>,
 }
 
 impl AccountShard {
     fn new() -> Self {
         AccountShard {
-            pending_withdraws_accs: Deque::new(),
+            pending_withdraws: Deque::new(),
             accounts: IndexMap::new(),
         }
     }
 
-    fn queue_pending_withdraw_account(&mut self, client: u16) {
-        self.pending_withdraws_accs.push_back(client).ok();
-    }
+    fn ready_withdrawals(&mut self) -> Option<SmallVec<[PendingWithdraw; 10]>> {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|clock_error| {
+                dbg!("system clock failed {:?}", clock_error);
+            })
+            .ok()?
+            .as_millis();
 
-    fn queue_priority_account(&mut self, client: u16) {
-        self.pending_withdraws_accs.push_front(client).ok();
-    }
-
-    fn accounts_with_pending_withdraws(&mut self) -> Option<SmallVec<[u16; 10]>> {
-        if self.pending_withdraws_accs.is_empty() {
-            return None;
-        }
-        let mut accounts = SmallVec::new();
-        while accounts.len() < 10 {
-            if let Some(id) = self.pending_withdraws_accs.pop_front() {
-                accounts.push(id);
-            } else {
-                break;
+        let mut ready: SmallVec<[PendingWithdraw; 10]> = SmallVec::new();
+        while ready.len() < 10 {
+            match self.pending_withdraws.front() {
+                Some(pw) if now >= pw.arrival_time + DISPUTE_WINDOW_MILLISECONDS => {
+                    if let Some(pw) = self.pending_withdraws.pop_front() {
+                        ready.push(pw);
+                    }
+                }
+                _ => break,
             }
         }
-        Some(accounts)
+
+        Some(ready)
     }
 }

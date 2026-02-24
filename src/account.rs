@@ -7,24 +7,10 @@ use smallvec::{SmallVec, smallvec};
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const DISPUTE_WINDOW_MILLISECONDS: u128 = 1; // 1 to test for now
-const PENDING_WITHDRAWS_SIZE: u64 = 100;
-
-struct PendingWithdraw {
-    tx: Tx,
-    arrival_time: u128,
-}
-
-pub struct PendingWithdraws {
-    max_released: u16,
-    inner: Queue<PendingWithdraw, 256>,
-}
-
 pub struct Account {
     locked: bool,
     client: u16,
     book: DoubleEntryBook,
-    pending_withdraws: PendingWithdraws,
     disputed_txs: HashMap<u32, DisputedTx>,
     deposits: HashMap<u32, Decimal>,
     withdraws: HashMap<u32, Decimal>,
@@ -51,7 +37,6 @@ impl Account {
         Account {
             client,
             book: DoubleEntryBook::new(),
-            pending_withdraws: PendingWithdraws::new(),
             disputed_txs: HashMap::new(),
             deposits: HashMap::new(),
             withdraws: HashMap::new(),
@@ -69,25 +54,6 @@ impl Account {
 
     pub fn client(&self) -> u16 {
         self.client
-    }
-
-    // run_pending_windraws_to_exhaustion runs withdraw txs - if we
-    // exhaust the list we return true
-    pub fn run_pending_withdraws_to_exhaustion(&mut self) -> bool {
-        let Some(pending_withdraws) = self.pending_withdraws.release_ready() else {
-            return false;
-        };
-        if pending_withdraws.is_empty() {
-            return false;
-        }
-
-        dbg!("z");
-
-        for pw in pending_withdraws {
-            self.withdraw(pw.tx);
-        }
-
-        true
     }
 
     pub fn deposit(&mut self, tx: Tx) {
@@ -115,20 +81,6 @@ impl Account {
         self.book.available_funds += amount;
         self.book.total_funds += amount;
         self.deposits.insert(tx.id, amount);
-    }
-
-    pub fn queue_pending_withdraw(&mut self, tx: Tx) {
-        let Some(arrival_time) = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .ok()
-            .map(|d| d.as_millis())
-        else {
-            return;
-        };
-
-        let pw = PendingWithdraw { tx, arrival_time };
-
-        self.pending_withdraws.queue(pw);
     }
 
     pub fn withdraw(&mut self, tx: Tx) {

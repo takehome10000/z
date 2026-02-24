@@ -16,6 +16,11 @@ pub enum Transaction {
     Chargeback(Tx),
 }
 
+pub struct PendingWithdraw {
+    pub arrival_time: u128,
+    pub tx: Tx,
+}
+
 pub struct DisputedTx {
     pub id: u32,
 }
