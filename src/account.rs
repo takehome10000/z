@@ -1,17 +1,14 @@
 use crate::output::AccountOutput;
-use crate::transaction::{DisputedTx, Transaction, Tx};
-use heapless::spsc::Queue;
+use crate::transaction::Tx;
 use rust_decimal::Decimal;
 use rust_decimal::prelude::*;
-use smallvec::{SmallVec, smallvec};
-use std::collections::HashMap;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::collections::{HashMap, HashSet};
 
 pub struct Account {
     locked: bool,
     client: u16,
     book: DoubleEntryBook,
-    disputed_txs: HashMap<u32, DisputedTx>,
+    disputed_txs: HashSet<u32>,
     deposits: HashMap<u32, Decimal>,
     withdraws: HashMap<u32, Decimal>,
 }
@@ -37,7 +34,7 @@ impl Account {
         Account {
             client,
             book: DoubleEntryBook::new(),
-            disputed_txs: HashMap::new(),
+            disputed_txs: HashSet::new(),
             deposits: HashMap::new(),
             withdraws: HashMap::new(),
             locked: false,
@@ -57,13 +54,9 @@ impl Account {
     }
 
     pub fn deposit(&mut self, tx: Tx) {
-        // round down to save the bank money
         let amount = tx
             .amount
             .round_dp_with_strategy(4, RoundingStrategy::ToZero);
-
-        let locked = self.locked;
-        let duplicate = self.deposits.contains_key(&tx.id);
 
         if amount.is_zero() {
             return;
@@ -71,10 +64,10 @@ impl Account {
         if amount.is_negative() {
             return;
         }
-        if locked {
+        if self.locked {
             return;
         }
-        if duplicate {
+        if self.deposits.contains_key(&tx.id) {
             return;
         }
 
@@ -86,24 +79,19 @@ impl Account {
     pub fn withdraw(&mut self, tx: Tx) {
         let amount = tx.amount.round_dp(4);
 
-        let is_negative = tx.amount.is_negative();
-        let locked = self.locked;
-        let duplicate = self.withdraws.contains_key(&tx.id);
-        let insufficient_funds = self.book.available_funds - amount;
-
         if amount.is_zero() {
             return;
         }
-        if insufficient_funds.is_negative() {
+        if amount.is_negative() {
             return;
         }
-        if locked {
+        if self.locked {
             return;
         }
-        if duplicate {
+        if self.withdraws.contains_key(&tx.id) {
             return;
         }
-        if is_negative {
+        if (self.book.available_funds - amount).is_negative() {
             return;
         }
 
@@ -112,22 +100,23 @@ impl Account {
         self.withdraws.insert(tx.id, amount);
     }
 
-    // todo: should disputes be made a priority over withdraw transactions?
     pub fn dispute(&mut self, tx: Tx) {
-        if self.disputed_txs.contains_key(&tx.id) {
+        if self.disputed_txs.contains(&tx.id) {
             return;
         }
+
         if let Some(&amount) = self.deposits.get(&tx.id) {
             self.book.available_funds -= amount;
             self.book.held_funds += amount;
-            self.disputed_txs.insert(tx.id, DisputedTx { id: tx.id });
+            self.disputed_txs.insert(tx.id);
         }
     }
 
     pub fn resolve(&mut self, tx: Tx) {
-        if !self.disputed_txs.contains_key(&tx.id) {
+        if !self.disputed_txs.contains(&tx.id) {
             return;
         }
+
         if let Some(&amount) = self.deposits.get(&tx.id) {
             self.disputed_txs.remove(&tx.id);
             self.book.held_funds -= amount;
@@ -136,9 +125,10 @@ impl Account {
     }
 
     pub fn chargeback(&mut self, tx: Tx) {
-        if !self.disputed_txs.contains_key(&tx.id) {
+        if !self.disputed_txs.contains(&tx.id) {
             return;
         }
+
         if let Some(&amount) = self.deposits.get(&tx.id) {
             self.disputed_txs.remove(&tx.id);
             self.book.held_funds -= amount;
