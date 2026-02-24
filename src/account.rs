@@ -54,6 +54,13 @@ impl Account {
     }
 
     pub fn deposit(&mut self, tx: Tx) {
+        if self.locked {
+            return;
+        }
+        if self.deposits.contains_key(&tx.id) {
+            return;
+        }
+
         let amount = tx
             .amount
             .round_dp_with_strategy(4, RoundingStrategy::ToZero);
@@ -64,12 +71,6 @@ impl Account {
         if amount.is_negative() {
             return;
         }
-        if self.locked {
-            return;
-        }
-        if self.deposits.contains_key(&tx.id) {
-            return;
-        }
 
         self.book.available_funds += amount;
         self.book.total_funds += amount;
@@ -77,18 +78,19 @@ impl Account {
     }
 
     pub fn withdraw(&mut self, tx: Tx) {
+        if self.locked {
+            return;
+        }
+        if self.withdraws.contains_key(&tx.id) {
+            return;
+        }
+
         let amount = tx.amount.round_dp(4);
 
         if amount.is_zero() {
             return;
         }
         if amount.is_negative() {
-            return;
-        }
-        if self.locked {
-            return;
-        }
-        if self.withdraws.contains_key(&tx.id) {
             return;
         }
         if (self.book.available_funds - amount).is_negative() {
