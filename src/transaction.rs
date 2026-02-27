@@ -17,6 +17,6 @@ pub enum Transaction {
 }
 
 pub struct PendingWithdraw {
-    pub arrival_time: u128,
+    pub arrival_time: u64,
     pub tx: Tx,
 }

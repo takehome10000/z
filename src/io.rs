@@ -17,7 +17,12 @@ use std::task::Poll;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt};
 use tokio::runtime::Runtime;
 
-const TX_CHUNK_SIZE: usize = 300_000;
+struct UpstreamPartnerConnection {
+    id: u16,
+    sequenced_files: Vec<u64>,
+}
+
+const TX_CHUNK_SIZE: usize = 5000;
 
 lazy_static! {
     static ref CSV_SCHEMA_INPUT: Schema = Schema::new(vec![
@@ -67,6 +72,8 @@ impl ConcurrentAsyncFileDescriptorReader {
     pub fn consume(&self, tx_csvs: Vec<String>) -> anyhow::Result<()> {
         self.rt.block_on(async {
             let mut handles = vec![];
+
+            // each partner has a sender
             let senders = self.senders.clone();
             for tx_csv in tx_csvs {
                 let senders = senders.clone();

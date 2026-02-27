@@ -1,6 +1,7 @@
 use crate::account::Account;
 use crate::output::AccountOutput;
 use crate::transaction::{PendingWithdraw, Transaction};
+use coarsetime::Clock;
 use crossbeam::channel::Receiver;
 use heapless::Deque;
 use indexmap::IndexMap;
@@ -10,9 +11,8 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::Acquire;
-use std::time::{SystemTime, UNIX_EPOCH};
 
-const DISPUTE_WINDOW_MILLISECONDS: u128 = 1;
+const DISPUTE_WINDOW_MILLISECONDS: u64 = 1;
 const PENDING_QUEUE_SIZE: usize = 256;
 
 pub struct Worker {
@@ -54,17 +54,11 @@ impl Worker {
                         }
                     }
                     Transaction::PendingWithdrawal(tx) => {
-                        let Some(arrival_time) = SystemTime::now()
-                            .duration_since(UNIX_EPOCH)
-                            .map_err(|clock_error| {
-                                dbg!("system clock failed {:?}", clock_error);
-                            })
-                            .ok()
-                            .map(|d| d.as_millis())
-                        else {
-                            continue;
+                        let arrival_time = Clock::now_since_epoch().as_millis();
+                        let pw = PendingWithdraw {
+                            arrival_time: arrival_time.into(),
+                            tx,
                         };
-                        let pw = PendingWithdraw { arrival_time, tx };
                         account_shard.pending_withdraws.push_back(pw).ok();
                     }
                     Transaction::Dispute(tx) => {
@@ -118,13 +112,7 @@ impl AccountShard {
     }
 
     fn ready_withdrawals(&mut self) -> Option<SmallVec<[PendingWithdraw; 10]>> {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|clock_error| {
-                dbg!("system clock failed {:?}", clock_error);
-            })
-            .ok()?
-            .as_millis();
+        let now = Clock::now_since_epoch().as_millis();
 
         let mut ready: SmallVec<[PendingWithdraw; 10]> = SmallVec::new();
         while ready.len() < 10 {
