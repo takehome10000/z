@@ -34,10 +34,14 @@ impl Worker {
                 break;
             }
 
-            if let Some(ready) = account_shard.ready_withdrawals() {
-                for pw in ready {
-                    if let Some(account) = account_shard.accounts.get_mut(&pw.tx.client) {
-                        account.borrow_mut().withdraw(pw.tx);
+            #[cfg(feature = "pending")]
+            {
+                // dbg!("HERE");
+                if let Some(ready) = account_shard.ready_withdrawals() {
+                    for pw in ready {
+                        if let Some(account) = account_shard.accounts.get_mut(&pw.tx.client) {
+                            account.borrow_mut().withdraw(pw.tx);
+                        }
                     }
                 }
             }
@@ -54,12 +58,25 @@ impl Worker {
                         }
                     }
                     Transaction::PendingWithdrawal(tx) => {
-                        let arrival_time = Clock::now_since_epoch().as_millis();
-                        let pw = PendingWithdraw {
-                            arrival_time: arrival_time.into(),
-                            tx,
-                        };
-                        account_shard.pending_withdraws.push_back(pw).ok();
+                        #[cfg(feature = "pending")]
+                        {
+                            dbg!("HERE 2 1");
+
+                            let arrival_time = Clock::now_since_epoch().as_millis();
+                            let pw = PendingWithdraw {
+                                arrival_time: arrival_time.into(),
+                                tx,
+                            };
+                            account_shard.pending_withdraws.push_back(pw).ok();
+                        }
+                        #[cfg(not(feature = "pending"))]
+                        {
+                            dbg!("HERE 2 2");
+
+                            if let Some(account) = account_shard.accounts.get_mut(&tx.client) {
+                                account.borrow_mut().withdraw(tx);
+                            }
+                        }
                     }
                     Transaction::Dispute(tx) => {
                         if let Some(account) = account_shard.accounts.get_mut(&tx.client) {

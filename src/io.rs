@@ -131,7 +131,7 @@ impl ConcurrentAsyncFileDescriptorReader {
                             let tx = Tx { client, id, amount };
                             let tx = match intent.trim() {
                                 "deposit" => Transaction::Deposit(tx),
-                                "withdraw" => Transaction::PendingWithdrawal(tx),
+                                "withdrawal" => Transaction::PendingWithdrawal(tx),
                                 "dispute" => Transaction::Dispute(tx),
                                 "resolve" => Transaction::Resolve(tx),
                                 "chargeback" => Transaction::Chargeback(tx),
