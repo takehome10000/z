@@ -1,8 +1,17 @@
 # payments engine
 
+a take home for a trading / fintech company back i did back in april 2025.
+
+its focus was on account balance correctness.
+
+input values ($CVS_INPUT) deterministically produce output values $(CSV_OUTPUT)
+
+the program proved to be deterministically correct through the testing automation upon
+takehome submission. 
+
 ## summary
 
-a lock free, no share work engine where we distribute workloads across avaliable cores on the machine
+a lock free, no share work engine where we distribute workloads across available cores on the machine
 
 worker threads are pinned at a 1:1 ratio to each core
 
